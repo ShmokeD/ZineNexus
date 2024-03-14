@@ -5,6 +5,7 @@ import cv2 as cv
 import numpy as np
 import time
 import pickle as pkl
+import requests
 
 # with open('calibrate.txt','rb') as calib_file:
 #     todumpcalib = pkl.load(calib_file)
@@ -16,13 +17,12 @@ import pickle as pkl
 # newcameramtx, roi = todumpnew
 
 
-# Working variables
 lastTime = time.time()
-Input, Output, Setpoint = 0, 0, 0
+Input, Output, Setpoint = 0, 0, 240
 ITerm, lastInput = 0, 0
-kp, ki, kd = 0, 0, 0
+kp, ki, kd = 1, 0, 0
 SampleTime = 1  # 1 sec
-outMin, outMax = 0, 0
+outMin, outMax = -255,255
 inAuto = False
 
 MANUAL = 0
@@ -30,15 +30,17 @@ AUTOMATIC = 1
 
 DIRECT = 0
 REVERSE = 1
+
 controllerDirection = DIRECT
 
+espOn = True
+baseUrl = "http://192.168.137.5:80"
+headers={'Content-Type': 'application/x-www-form-urlencoded'}
 
 def Compute():
     global lastTime, Input, Output, Setpoint, ITerm, lastInput
     global kp, ki, kd, SampleTime, outMin, outMax, inAuto
 
-    if not inAuto:
-        return
 
     now = time.time()
     timeChange = now - lastTime
@@ -50,7 +52,7 @@ def Compute():
             ITerm = outMax
         elif ITerm < outMin:
             ITerm = outMin
-
+        print(f"Error = {error}")
         dInput = Input - lastInput
 
         # Compute PID Output
@@ -64,22 +66,8 @@ def Compute():
         lastInput = Input
         lastTime = now
 
-
-def SetTunings(Kp, Ki, Kd):
-    global kp, ki, kd, SampleTime, controllerDirection
-
-    if Kp < 0 or Ki < 0 or Kd < 0:
-        return
-
-    SampleTimeInSec = SampleTime / 1000.0
-    kp = Kp
-    ki = Ki * SampleTimeInSec
-    kd = Kd / SampleTimeInSec
-
-    if controllerDirection == REVERSE:
-        kp = -kp
-        ki = -ki
-        kd = -kd
+        if espOn:
+            rotate(Output)
 
 
 def SetSampleTime(NewSampleTime):
@@ -119,7 +107,6 @@ def SetMode(Mode):
         Initialize()
     inAuto = newAuto
 
-
 def Initialize():
     global lastInput, ITerm, outMin, outMax
 
@@ -131,100 +118,111 @@ def Initialize():
         ITerm = outMin
 
 
-def SetControllerDirection(Direction):
-    global controllerDirection
-    controllerDirection = Direction
+def startMoving():
+    requests.post(baseUrl+'/start',headers = headers)
 
+def stopMoving():
+    requests.post(baseUrl+'/stop', headers=headers)
 
-# Example usage:
+def rotate(value: int):
 
-SetTunings(1, 2, 3)
-SetSampleTime(1000)
-SetOutputLimits(0, 255)
-SetMode(AUTOMATIC)
-SetControllerDirection(DIRECT)
-
-    # Call Compute() function periodically to compute PID output
-    # Update Input and Setpoint values as needed
-
-
-
-def readBarcode(cont):
-    output = ""
-    widths = {}
-    for contour in cont:
-
-        epsilon = 0.04 * cv.arcLength(contour, True)
-        approx = cv.approxPolyDP(contour, epsilon, True)
-
-        vertices = len(approx)
-
-        if vertices ==3 or vertices ==4:
-            rect = cv.minAreaRect(contour)
-            
-            (centx, centy), (width, height), angle = rect
-            # print(f' {centx} {width}')
-
-            box = cv.boxPoints(rect)
-            box = np.intp(box)
-
-
-            widths[centx] = width
-
-    if(len(widths.values()) == 0):
-        return 
+    if(abs(value)<=90):
+        startMoving()
+        return
     
-
-
-    maxThick = max(widths.values())
-    thickX = 0
-    for key, val in widths.items():
-        if maxThick == val:
-            thickX = key
-
-    thinThick = 0.1* maxThick
-    thickThick = 0.2* maxThick
-
-    widths.pop(thickX)
-
+    postValue = 0
+    if(value < 0):
+        postValue= abs(value) + 255
     
-    s = list(widths.keys())
-    s.sort()
-    for widt in s:
-        if(abs(widths[widt]/thinThick - 1) < 0.15):
-            output += "0"
-        elif(abs(widths[widt]/thickThick - 1) < 0.15):
-            output += "1"
-        else:
-            pass
-            # print(widths[widt]/maxThick)
+    else:
+        postValue = value
         
-        # print(f'{widths[widt]}  ', end = '')
-    
-    # time.sleep(0.1)
-    return output
 
-    # print(output)
+    requests.post(baseUrl+'/turn', headers= headers, data=f'plain={postValue}')
+    print(f'Rotate request with {postValue}')
+    
+
+greenCodes = [0,3,6,9,12,15]
+redCodes = [1,4,7,10,13]
+blueCodes = [2,5,8,11,14] 
+
+def readBarcode(image):
+
+   
+        #TODO: Find the closest circled of large exnough radius and compute pid against it 
+        #TODO: Minimum Area to be decided for threshold
+    cont, hier = cv.findContours(image.copy(), cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+    parentArea = 0
+    hier = hier[0]
+    count = 0
+    childrenCount = {}
+    parent  = -1
+    childrenCont = []
+    for i in range(len(hier)):
+        count = 0
+        child = hier[i][2]
+        
+        while child!= -1:
+            count += 1
+            child = hier[child][2]
+
+        childrenCount[i] = count
+ 
+    
+    xArea= {}
+    xAreaS ={}
+    for i, j in childrenCount.items():
+        if j == 4:
+            parent = i
+            parentContour = cont[i]
+    
+    if parent != -1:
+        nxtChild = hier[parent][2]
+        while nxtChild != -1:
+            childrenCont.append(cont[nxtChild])
+            nxtChild = hier[nxtChild][0]
+
+        parentArea = cv.contourArea(parentContour)
+        for con in childrenCont:
+            moment = cv.moments(con)
+
+            cx = cy = 0
+            if(moment['m00'] != 0):
+                cx = int(moment['m10']/moment['m00'])
+                cy = int(moment['m01']/moment['m00'])
+
+                xArea[cx] = cv.contourArea(con)
+
+        sortedKeys = sorted(xArea.keys())
+        xAreaS= {i:xArea[i] for i in sortedKeys}
+        
+        
+    print(parentArea, xAreaS)
+    
+    circlePoints = [] #list(tuple())
+    rectPoint = []
+    i = 0
+
+
     
     
 def getShapeAndStuff(cont) -> list:
 
-    circlePoints = [] #list(tuple())
-    rectPoint = []
+
+   
     i = 0
-    
+    circlePoints = []
+    rectPoint = []
+    triPoints=[]
     for contour in cont:
 
         #Centroid Detection
         M = cv.moments(contour)
         cx = cy = 0
         if(M['m00'] != 0):
-            # print(M)
             cx = int(M['m10']/M['m00'])
             cy = int(M['m01']/M['m00'])
 
-            # print("LOOP")
-            # print(f'{cx} {cy}')
             # cv.circle( contours, (cx,cy), 1, (0,255,255),  1 )
 
         #Polygon Approximation
@@ -236,122 +234,199 @@ def getShapeAndStuff(cont) -> list:
                         
         cv.drawContours(frame, [approx], 0, (0, 255, 0), 2)
         cv.imshow('Approx', frame)
-        #TODO: Find the closest circle of large exnough radius and compute pid against it 
+
         #TODO: Minimum Area to be decided for threshold
 
         vertices = len(approx)
-        
-        if vertices == 4 or vertices == 3:
-            i+=1
-            rectPoint.append(tuple([cx,cy]))
+                   
             
-            
-        elif vertices >5 :
+        if 30>=vertices >=5 :
             if perimeter > 500:
-                cv.putText(contours, f'{cx}, {cy} {perimeter}', (cx,cy), 1,1,(255,0,0),1)
+                cv.putText(frameShown, f'{cx}, {cy}', (cx,cy), 1,1,(255,0,0),1)
                 circlePoints.append(tuple([cx,cy]))
-                    
-        
+        if vertices == 4 :
+            if perimeter>500:
+                cv.putText(frameShown,f'{cx},{cy}',(cx,cy),1,1,(255,0,0),1)
+                rectPoint.append(tuple([cx,cy]))
+        if vertices == 3 :
+            if perimeter>500:
+                cv.putText(frameShown,f'{cx},{cy}',(cx,cy),1,1,(255,0,0),1)
+                triPoints.append(tuple([cx,cy]))
             
        
 
-    if(i>4):
-        ccc, _ = cv.findContours(thresh, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)  # Might try using cont instead
-        cv.drawContours(frame, ccc, -1, (255,0,0),1)
-        cv.imshow('ccc', frame)
-        try:
-            code = int(readBarcode(cont), 2) 
-        except ValueError:
-            print('Cant Read')   
     
-    circlePoints.sort(key= lambda x:x[1], reverse= True)
-    rectPoint.sort(key= lambda x:x[1], reverse= True)
-    try:
-        if(rectPoint[0][1] >= circlePoints[0][1]):
-            return ['Rectangle', code]
-
-        else:
-            return ['Circle', (cx,cy)]
-
-    except:
-        return ['Circle', midPointBase]
+    
+    
+    circlePoints.sort(key = lambda x:x[1], reverse = True)
+    rectPoint.sort(key = lambda x:x[1], reverse = True)
+    triPoints.sort(key = lambda x:x[1], reverse = True)
     
 
+    if(len(circlePoints) == len(rectPoint) == len(triPoints) == 0):
+        return['None', midPointBase]
+    
+    elif (len(triPoints) != 0):
+        return ['Triangle', triPoints[0]]
+    
+    elif (len(rectPoint) != 0):
+        return ['Rectangle', rectPoint[0]]
+    
+    else:
+        return ['Circle', circlePoints[0]]
+  
 
 
 
-
-
-
+    
 
 set = False
 
 
+vid = cv.VideoCapture(0)
+minimumLength = 1000
 
-
-
-
-if True:
-    # vid = cv.VideoCapture('http://100.103.177.251:8080/video')
-    minimumLength = 1000
-    vid = cv.VideoCapture(0)
+# vid = cv.VideoCapture(0)
 #shape[0] gives height shape[1] gives length
-    vid.set
+vid.set
 
-    while True:
+if espOn:
+    startMoving()
+while True:
 
-        ret, frame = vid.read()
-        if ret == True:
-
-            frame = cv.resize(frame, (640,480))
-        #     frame = cv.undistort(frame.copy(), mtx, dist, None, newcameramtx)
-        # # crop the image
-        #     x, y, w, h = roi
-        #     frame = frame[y:y+h, x:x+w]
-
-            
-            Compute()           
-            #Line To Compute PID Against(To be Calibrated)
-            midPointBase = (frame.shape[1]//2, 0)
-            midPointHeight = (frame.shape[1]//2, frame.shape[0])
-            if not set:
-                followPoint = midPointBase
-                set = True
-
-            ############ Canny Edge Detection ###########
-            grayed = cv.cvtColor(frame.copy(), cv.COLOR_BGR2GRAY)
-            blurred = cv.GaussianBlur(grayed, (7,7), 0)
-            edges = cv.Canny(blurred.copy(), 127,255)
-            # cv.imshow('Canny', edges)
-            
-            _, thresh = cv.threshold(blurred.copy(), 127,255, cv.THRESH_BINARY)
-            # cv.imshow('Thresh', thresh)
-            cont, _ = cv.findContours(edges.copy(), cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-            contours = cv.drawContours(frame.copy(), cont, -1, (0,0,255),1)
-
-
-            
-            pointss = getShapeAndStuff(cont)
-
-            if pointss[0] == 'Circle':
-                followPoint = pointss[1]
-                
-
-            
-
-
-            
-            
-
-            
-            ######## Add the Line at Last To not affect Edge Detection #####   
-            cv.line(contours,midPointBase, midPointHeight, (255,255,255), 2)
-
-            cv.putText(contours, f'Following {followPoint}', midPointHeight, 4, 1, (225,225,250), 1)
-            cv.imshow('Contours', contours)
-            
-
-        if cv.waitKey(20) & 0xFF==ord('d'):
-            cv.destroyAllWindows()
-            break
+    ret, frame = vid.read()
+    if ret == True:
+        frame = cv.rotate(frame, cv.ROTATE_90_CLOCKWISE)
         
+        # frame = cv.resize(frame, (640,480))
+        frameShown = frame.copy()
+        frameSave = frame.copy()
+
+        hsv = cv.cvtColor(frame.copy(), cv.COLOR_BGR2HSV)
+        blurredHsv = cv.GaussianBlur(hsv, (9,9), 0)
+
+
+
+
+###################################### MASKS ################################################
+        lowerGreen = np.array([36,25,25])
+        upperGreen = np.array([70,255,255])
+        greenMask = cv.inRange(blurredHsv, lowerGreen ,upperGreen)
+
+
+        lowerBlue = np.array([100,50,70])
+        upperBlue = np.array([130,255,255])
+        blueMask = cv.inRange(blurredHsv, lowerBlue, upperBlue)
+
+        
+        # lowerRed = np.array([300,130,0])
+        # upperRed = np.array([35,255,255])
+
+                # lower boundary RED color range values; Hue (0 - 10)
+        lower1 = np.array([0, 100, 20])
+        upper1 = np.array([10, 255, 255])
+        
+        # upper boundary RED color range values; Hue (160 - 180)
+        lower2 = np.array([160,100,20])
+        upper2 = np.array([179,255,255])
+        
+        lower_mask = cv.inRange(blurredHsv, lower1, upper1)
+        upper_mask = cv.inRange(blurredHsv, lower2, upper2)
+
+        redMask = lower_mask + upper_mask
+###################################### MASKS ################################################
+
+
+
+
+        mask = greenMask
+        
+        masked =  cv.bitwise_and(blurredHsv, blurredHsv, mask = mask)
+                
+    #     frame = cv.undistort(frame.copy(), mtx, dist, None, newcameramtx)
+    # # crop the frame
+    #     x, y, w, h = roi
+    #     frame = frame[y:y+h, x:x+w]
+
+        
+
+
+        #Line To Compute PID Against(To be Calibrated)
+        midPointHeight = (frame.shape[1]//2, 0)
+        midPointBase = (frame.shape[1]//2, frame.shape[0])
+        if not set:
+            followPoint = midPointBase
+            set = True
+
+        
+
+        ############ Canny Edge Detection ###########
+        blurred = cv.GaussianBlur(masked.copy(), (7,7), 0)
+        edges = cv.Canny(masked.copy(), 127,255)
+
+        maskedContours, _ = cv.findContours(edges.copy(), cv.RETR_CCOMP, cv.CHAIN_APPROX_NONE)
+        maskedEdges = cv.drawContours(frameShown.copy(), maskedContours , -1, (0,0,255),1)
+        cv.imshow('Masked Edges', maskedEdges)
+        
+        
+        grayed = cv.cvtColor(frame.copy(), cv.COLOR_BGR2GRAY)
+        blurredThresh = cv.GaussianBlur(grayed, (7,7), 0)
+        _, thresh = cv.threshold(blurredThresh.copy(), 127,255, cv.THRESH_BINARY)
+        threshEdges = cv.Canny(thresh, 127,255)
+        threshContours, _ = cv.findContours(threshEdges, cv.RETR_LIST, cv.CHAIN_APPROX_NONE)
+        cv.drawContours(frame, threshContours, -1 , (255,134,255),thickness=3)
+        cv.imshow('Thresh', frame)
+        
+        pointss = getShapeAndStuff(threshContours)
+        # try:
+        #     readBarcode( threshContours )
+        # except:
+        #     pass
+        code = 3
+        # reada barcode if follow point is over the barcode
+        text = 'Not Folloing'
+        if pointss[0] == 'Circle':
+            SetMode(AUTOMATIC)
+            followPoint = pointss[1]
+            text = f'Following {followPoint}'
+
+        elif pointss[0] == 'Rectangle':
+            SetMode(AUTOMATIC)
+            code = pointss[1]
+
+            if code in greenCodes:
+                mask = greenMask
+
+            elif code in blueCodes:
+                mask = blueMask
+
+            else:
+                mask = redMask
+        
+        else:
+            text = 'Not Following'
+            SetMode(MANUAL)
+
+
+
+              
+        if(followPoint != midPointBase):
+            Input = followPoint[0]
+            print(f'Input = {Input} Output = {Output}')
+        Compute()
+        
+                               
+            
+        ######## Add the Line at Last To not affect Edge Detection #####   
+        cv.line(frameShown, midPointBase, midPointHeight, (255,255,255), 2)
+        cv.line(frameShown, midPointBase, followPoint, (231,93,165))
+
+        cv.putText(frameShown, text, (0, 30), 4, 1, (225,225,250), 1)
+        cv.imshow('Main', frameShown)
+        
+
+    if cv.waitKey(20) & 0xFF==ord('d'):
+        if espOn:
+            stopMoving()
+        cv.destroyAllWindows()
+        break

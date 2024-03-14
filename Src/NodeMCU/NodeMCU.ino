@@ -16,10 +16,11 @@ const char* password = "nonumbers1";
 ESP8266WebServer server(80);
 ESP8266HTTPUpdateServer httpUpdater;
 
+
+int botSpeed = 105;
 void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(9600);
   WiFi.begin(ssid, password);
+  Serial.begin(9600);
 
   pinMode(ENA, OUTPUT);
   pinMode(ENB, OUTPUT);
@@ -32,7 +33,7 @@ void setup() {
 
 
   digitalWrite(IN_1, HIGH);
-  digitalWrite(IN_2, LOW);
+  digitalWrite(IN_2, LOW);  
   digitalWrite(IN_3, LOW);
   digitalWrite(IN_4, HIGH);
   analogWrite(ENA, 0);
@@ -56,6 +57,9 @@ void setup() {
 
   httpUpdater.setup(&server);
   server.begin();
+
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
 }
 
 void loop() {
@@ -63,19 +67,28 @@ void loop() {
   server.handleClient();
 }
 
+
 void start() {
   int runTime = 0;
   runTime = server.arg("time").toInt();
   if (server.hasArg("time")) {
     server.send(200, "text/plain", "Start Movement " + String(runTime));
-    Serial.println("Started "+String(runTime));
+    Serial.println("Started " + String(runTime));
 
   } else {
     server.send(200, "text/plain", "Start Movement No Args");
     Serial.println("started with no args");
   }
+
+  if (server.hasArg("speed")) {
+    botSpeed = server.arg("speed").toInt();
+  }
+
   startMovement();
 
+  if (runTime == 0) {
+    return;
+  }
   delay(runTime);
   stopMovement();
   Serial.println("STopped");
@@ -91,8 +104,8 @@ void stopMovement() {
   analogWrite(ENB, 0);
 }
 void startMovement() {
-  analogWrite(ENA, 153);
-  analogWrite(ENB, 153);
+  analogWrite(ENA, botSpeed);
+  analogWrite(ENB, botSpeed);
 }
 
 void basicMovement() {
@@ -154,19 +167,25 @@ void turn() {
     server.send(200, "text/plain", "Turning");
   }
   int turnValue = server.arg("plain").toInt();
+
+
   Serial.print("Received TurnValue ");
   Serial.println(turnValue);
 
-  if (turnValue == 0) {
-    startMovement();
-  }
 
-  if (turnValue > 0) {
+
+  if (turnValue > 65 && turnValue <= 255) {
+    analogWrite(ENB, 0);
     analogWrite(ENA, turnValue);
   }
 
-  else if (turnValue < 0) {
-    analogWrite(ENB, abs(turnValue));
+  else if (turnValue > 320) {
+    analogWrite(ENA, 0);
+    analogWrite(ENB, turnValue - 256);
+  }
+
+  else {
+    startMovement();
   }
 }
 void rotate() {
